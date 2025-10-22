@@ -4,6 +4,16 @@ document.addEventListener("DOMContentLoaded", () => {
   const signupForm = document.getElementById("signup-form");
   const messageDiv = document.getElementById("message");
 
+  // helper: escape HTML to avoid XSS when injecting participant names/emails
+  function escapeHtml(str) {
+    return String(str || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
   // Function to fetch activities from API
   async function fetchActivities() {
     try {
@@ -13,6 +23,9 @@ document.addEventListener("DOMContentLoaded", () => {
       // Clear loading message
       activitiesList.innerHTML = "";
 
+      // Reset activity select options (keep the placeholder option)
+      activitySelect.innerHTML = '<option value="">-- Select an activity --</option>';
+
       // Populate activities list
       Object.entries(activities).forEach(([name, details]) => {
         const activityCard = document.createElement("div");
@@ -20,11 +33,33 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const spotsLeft = details.max_participants - details.participants.length;
 
+        // Build participants list HTML
+        const participantsHtml =
+          details.participants && details.participants.length
+            ? details.participants
+                .map(
+                  (p) =>
+                    `<li class="participant-item"><span class="participant-email">${escapeHtml(
+                      p
+                    )}</span> <button class="delete-btn" data-email="${escapeHtml(p)}" data-activity="${escapeHtml(
+                      name
+                    )}" title="Unregister">✖</button></li>`
+                )
+                .join("")
+            : '<li class="participant-item empty">No participants yet</li>';
+
         activityCard.innerHTML = `
-          <h4>${name}</h4>
-          <p>${details.description}</p>
-          <p><strong>Schedule:</strong> ${details.schedule}</p>
+          <h4>${escapeHtml(name)}</h4>
+          <p>${escapeHtml(details.description)}</p>
+          <p><strong>Schedule:</strong> ${escapeHtml(details.schedule)}</p>
           <p><strong>Availability:</strong> ${spotsLeft} spots left</p>
+
+          <div class="participants-section">
+            <p><strong>Participants:</strong></p>
+            <ul class="participants-list">
+              ${participantsHtml}
+            </ul>
+          </div>
         `;
 
         activitiesList.appendChild(activityCard);
@@ -34,6 +69,45 @@ document.addEventListener("DOMContentLoaded", () => {
         option.value = name;
         option.textContent = name;
         activitySelect.appendChild(option);
+      });
+
+      // Attach click handlers for delete buttons (delegation isn't strictly necessary here,
+      // but we re-run after rendering so handlers are bound)
+      document.querySelectorAll('.delete-btn').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          const email = btn.getAttribute('data-email');
+          const activity = btn.getAttribute('data-activity');
+
+          if (!confirm(`Unregister ${email} from ${activity}?`)) return;
+
+          try {
+            const res = await fetch(
+              `/activities/${encodeURIComponent(activity)}/participants?email=${encodeURIComponent(
+                email
+              )}`,
+              { method: 'DELETE' }
+            );
+
+            const result = await res.json();
+
+            if (res.ok) {
+              // Remove the participant's list item from the DOM
+              const li = btn.closest('li');
+              if (li) li.remove();
+
+              // Simple fallback: reload activities to keep UI consistent
+              // (note: previously attempted to use a ":contains" selector here,
+              // which is not supported by querySelector and threw an exception
+              // causing the catch block to run even when the delete succeeded)
+              fetchActivities();
+            } else {
+              alert(result.detail || 'Failed to unregister participant');
+            }
+          } catch (err) {
+            console.error('Error unregistering participant:', err);
+            alert('Failed to unregister participant. See console for details.');
+          }
+        });
       });
     } catch (error) {
       activitiesList.innerHTML = "<p>Failed to load activities. Please try again later.</p>";
